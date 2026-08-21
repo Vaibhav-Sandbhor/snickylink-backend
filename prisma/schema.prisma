@@ -1,0 +1,280 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// AUTH & USERS
+// ─────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  displayName  String
+  avatarInitials String @default("")
+  city         String?
+  country      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  refreshTokens RefreshToken[]
+
+  coupleAsUserOne Couple? @relation("UserOne")
+  coupleAsUserTwo Couple? @relation("UserTwo")
+
+  sentMessages  Message[]      @relation("SentMessages")
+  posts         Post[]
+  comments      Comment[]
+  votes         Vote[]
+  savedPosts    SavedPost[]
+  xpLogs        XpLog[]
+  missionActs   MissionCompletionAction[]
+
+  @@index([email])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────
+// COUPLE PAIRING
+// ─────────────────────────────────────────────
+
+model Couple {
+  id              String    @id @default(uuid())
+  coupleName      String    @default("New Couple")
+  inviteCode      String    @unique
+  userOneId       String    @unique
+  userTwoId       String?   @unique
+  anniversaryDate DateTime?
+  city            String?
+  country          String?
+  theme           String    @default("light")
+
+  // gamification snapshot (denormalized for fast profile/leaderboard reads)
+  xp        Int      @default(0)
+  level     Int      @default(1)
+  streak    Int      @default(0)
+  lastActiveDate DateTime?
+
+  // "four pillars"
+  pillarCommunication Int @default(50)
+  pillarConnection    Int @default(50)
+  pillarEffort        Int @default(50)
+  pillarTrust         Int @default(50)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userOne User  @relation("UserOne", fields: [userOneId], references: [id])
+  userTwo User? @relation("UserTwo", fields: [userTwoId], references: [id])
+
+  messages         Message[]
+  posts            Post[]
+  coupleMissions   CoupleMission[]
+  xpLogs           XpLog[]
+  leaderboardCache LeaderboardCache?
+
+  @@index([city])
+  @@index([country])
+  @@index([xp])
+}
+
+// ─────────────────────────────────────────────
+// CHAT
+// ─────────────────────────────────────────────
+
+model Message {
+  id        String   @id @default(uuid())
+  coupleId  String
+  senderId  String
+  text      String
+  createdAt DateTime @default(now())
+  readAt    DateTime?
+
+  couple Couple @relation(fields: [coupleId], references: [id], onDelete: Cascade)
+  sender User   @relation("SentMessages", fields: [senderId], references: [id])
+
+  @@index([coupleId, createdAt])
+}
+
+// ─────────────────────────────────────────────
+// COMMUNITY
+// ─────────────────────────────────────────────
+
+model Post {
+  id         String   @id @default(uuid())
+  authorId   String
+  coupleId   String?
+  isAnonymous Boolean @default(false)
+  tag        String
+  title      String
+  body       String
+  createdAt  DateTime @default(now())
+
+  author User    @relation(fields: [authorId], references: [id])
+  couple Couple? @relation(fields: [coupleId], references: [id])
+
+  votes      Vote[]
+  comments   Comment[]
+  savedBy    SavedPost[]
+
+  @@index([createdAt])
+  @@index([tag])
+}
+
+model Vote {
+  id        String   @id @default(uuid())
+  postId    String
+  userId    String
+  value     Int      // 1 = upvote, -1 = downvote
+  createdAt DateTime @default(now())
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([postId, userId])
+}
+
+model Comment {
+  id        String   @id @default(uuid())
+  postId    String
+  userId    String
+  body      String
+  createdAt DateTime @default(now())
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([postId, createdAt])
+}
+
+model SavedPost {
+  id     String @id @default(uuid())
+  postId String
+  userId String
+  createdAt DateTime @default(now())
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([postId, userId])
+}
+
+// ─────────────────────────────────────────────
+// SNICKS / GAMIFICATION
+// ─────────────────────────────────────────────
+
+enum MissionType {
+  daily
+  weekly
+  monthly
+  deep
+  location
+  emotional
+}
+
+enum VerificationMethod {
+  self_report
+  photo_upload
+  location_checkin
+  partner_confirm
+}
+
+model MissionTemplate {
+  id          String   @id @default(uuid())
+  type        MissionType
+  title       String
+  detail      String
+  xpReward    Int
+  verification VerificationMethod @default(self_report)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  coupleMissions CoupleMission[]
+
+  @@index([type, active])
+}
+
+enum MissionStatus {
+  locked
+  active
+  completed
+  expired
+}
+
+model CoupleMission {
+  id                String   @id @default(uuid())
+  coupleId          String
+  missionTemplateId String
+  status            MissionStatus @default(active)
+  assignedDate      DateTime @default(now())
+  completedAt       DateTime?
+  expiresAt         DateTime?
+
+  couple          Couple          @relation(fields: [coupleId], references: [id], onDelete: Cascade)
+  missionTemplate MissionTemplate @relation(fields: [missionTemplateId], references: [id])
+  actions         MissionCompletionAction[]
+
+  @@index([coupleId, status])
+  @@index([coupleId, assignedDate])
+}
+
+model MissionCompletionAction {
+  id              String   @id @default(uuid())
+  coupleMissionId String
+  userId          String
+  method          VerificationMethod
+  payload         String?  // e.g. photo URL, geo coords, note
+  createdAt       DateTime @default(now())
+
+  coupleMission CoupleMission @relation(fields: [coupleMissionId], references: [id], onDelete: Cascade)
+  user          User          @relation(fields: [userId], references: [id])
+}
+
+model XpLog {
+  id        String   @id @default(uuid())
+  coupleId  String
+  userId    String?
+  amount    Int
+  reason    String
+  createdAt DateTime @default(now())
+
+  couple Couple @relation(fields: [coupleId], references: [id], onDelete: Cascade)
+  user   User?  @relation(fields: [userId], references: [id])
+
+  @@index([coupleId, createdAt])
+}
+
+// ─────────────────────────────────────────────
+// LEADERBOARDS (materialized cache, refreshed by a job)
+// ─────────────────────────────────────────────
+
+model LeaderboardCache {
+  coupleId      String  @id
+  scopeCity     String?
+  scopeCountry  String?
+  rankCity      Int?
+  rankCountry   Int?
+  rankGlobal    Int?
+  leagueName    String  @default("Bronze")
+  leagueXp      Int     @default(0)
+  updatedAt     DateTime @updatedAt
+
+  couple Couple @relation(fields: [coupleId], references: [id], onDelete: Cascade)
+}
